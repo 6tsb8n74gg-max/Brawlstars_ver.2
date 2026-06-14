@@ -10,8 +10,9 @@ const rayRect=(x1,y1,x2,y2,r)=>{let dx=x2-x1,dy=y2-y1,t0=0,t1=1;for(const [p,q] 
 const blocked=(a,b)=>walls.some(w=>rayRect(a.x,a.y,b.x,b.y,w));
 const wallNear=(x,y,r=46)=>walls.some(w=>rectHit({x,y,r},w));
 const freeSpot=(r=30)=>{for(let t=0;t<2000;t++){let p={x:rnd(260,MAP.w-260),y:rnd(260,MAP.h-260),r};if(!walls.some(w=>rectHit(p,w))&&!boxes.some(b=>dist(p,b)<80)&&(!player||dist(p,player)>650))return p}return{x:300,y:300,r}};
-function makeBrawler(x,y,me=false){return{x,y,r:24,me,hp:420,maxHp:420,power:0,ammo:3,ammoT:0,ult:0,aim:0,dead:false,lastAction:0,lastHit:0,speed:me?315:285,aiT:0,target:null,shootT:0,stuckT:0,lastX:x,lastY:y,detour:0,brain:Math.random()*6.28,moveX:0,moveY:0,decisionT:0,goal:null,color:me?'#8e45d6':'#e84f4f'}}
-function reset(){state='play';overlay.classList.remove('show');msg='';walls=[];boxes=[];bullets=[];cubes=[];gas={r:2500,t:0};
+const PLAYER_SPEED=340, BOT_SPEED=315;
+function makeBrawler(x,y,me=false){return{x,y,r:24,me,hp:420,maxHp:420,power:0,ammo:3,ammoT:0,ult:0,aim:0,dead:false,lastAction:0,lastHit:0,speed:me?PLAYER_SPEED:BOT_SPEED,aiT:0,target:null,shootT:0,stuckT:0,lastX:x,lastY:y,detour:0,brain:Math.random()*6.28,moveX:0,moveY:0,decisionT:0,goal:null,color:me?'#8e45d6':'#e84f4f'}}
+function reset(){state='play';overlay.classList.remove('show');msg='';walls=[];boxes=[];bullets=[];cubes=[];gas={r:2500,t:0};input.move.x=0;input.move.y=0;input.aim.x=1;input.aim.y=0;
  // walls
  for(let i=0;i<34;i++){let w={x:rnd(200,MAP.w-520),y:rnd(180,MAP.h-360),w:rnd(120,360),h:rnd(80,240)};if(Math.hypot(w.x-MAP.w/2,w.y-MAP.h/2)>260)walls.push(w)}
  // boxes first, then spawn away from walls/boxes
@@ -20,10 +21,10 @@ function reset(){state='play';overlay.classList.remove('show');msg='';walls=[];b
  while(walls.some(w=>rectHit(player,w))||boxes.some(b=>dist(player,b)<70)){let p=freeSpot(24);player.x=p.x;player.y=p.y}
  bots=[];for(let i=0;i<9;i++){let p=freeSpot(24);while(dist(p,player)<900)p=freeSpot(24);bots.push(makeBrawler(p.x,p.y,false))}
  last=performance.now()} // loop is started once globally
-function addPower(e){e.power++;e.maxHp=420+e.power*70;e.hp=Math.min(e.maxHp,e.hp+70);e.speed=(e.me?315:285)+Math.min(45,e.power*4)}
+function addPower(e){e.power++;e.maxHp=420+e.power*70;e.hp=Math.min(e.maxHp,e.hp+70);e.speed=e.me?PLAYER_SPEED:BOT_SPEED}
 function damageFor(e,ult=false){return (ult?115:74)+e.power*(ult?14:9)}
 function canMove(e,nx,ny){let oldx=e.x,oldy=e.y;e.x=nx;e.y=ny;let bad=walls.some(w=>rectHit(e,w));e.x=oldx;e.y=oldy;return !bad}
-function move(e,dx,dy,dt,faceMove=true){let len=Math.hypot(dx,dy);if(len>1){dx/=len;dy/=len}let ox=e.x,oy=e.y;let nx=clamp(e.x+dx*e.speed*dt,e.r,MAP.w-e.r),ny=e.y;if(canMove(e,nx,ny))e.x=nx;ny=clamp(e.y+dy*e.speed*dt,e.r,MAP.h-e.r);if(canMove(e,e.x,ny))e.y=ny;if(faceMove&&len>.1&&Math.hypot(e.x-ox,e.y-oy)>0.5)e.aim=Math.atan2(dy,dx)}
+function move(e,dx,dy,dt,faceMove=true){dt=Math.min(dt,.022);let len=Math.hypot(dx,dy);if(len>1){dx/=len;dy/=len}let ox=e.x,oy=e.y;let nx=clamp(e.x+dx*e.speed*dt,e.r,MAP.w-e.r),ny=e.y;if(canMove(e,nx,ny))e.x=nx;ny=clamp(e.y+dy*e.speed*dt,e.r,MAP.h-e.r);if(canMove(e,e.x,ny))e.y=ny;if(faceMove&&len>.1&&Math.hypot(e.x-ox,e.y-oy)>0.5)e.aim=Math.atan2(dy,dx)}
 function shoot(e,ang=e.aim,ult=false){if(e.dead)return;if(!ult){if(e.ammo<1)return;e.ammo--;e.ammoT=0}else{if(e.ult<5)return;e.ult=0}e.lastAction=performance.now()/1000;let n=ult?9:5,spread=ult?.62:.46;for(let i=0;i<n;i++){let a=ang-spread/2+spread*(i/(n-1));bullets.push({x:e.x+Math.cos(a)*30,y:e.y+Math.sin(a)*30,vx:Math.cos(a)*(ult?770:690),vy:Math.sin(a)*(ult?770:690),r:ult?7:5,life:ult?.48:.36,own:e,dmg:damageFor(e,ult),ult})}}
 function hitBrawler(target,b){if(target.dead||target===b.own)return;target.hp-=b.dmg;target.lastHit=performance.now()/1000;if(b.own&&!b.ult)b.own.ult=Math.min(5,b.own.ult+1);if(target.hp<=0){target.dead=true;cubes.push({x:target.x,y:target.y,r:16,n:Math.max(1,target.power)})}}
 function update(dt){if(state!=='play')return;let now=performance.now()/1000;
@@ -136,7 +137,7 @@ function drawBrawler(e){if(e.dead)return;ctx.save();ctx.translate(e.x,e.y);ctx.r
  for(let i=0;i<3;i++){ctx.fillStyle=i<e.ammo?'#ffd74f':'#222';ctx.fillRect(px+i*24,py+12,20,6)}
  // ult / power
  ctx.fillStyle='#fff';ctx.font='bold 13px Arial';ctx.textAlign='center';ctx.fillText('◆'+e.power,e.x,py-5);ctx.fillStyle='#36a4ff';ctx.fillRect(px,py+22,bw*(e.ult/5),5)}
-function loop(t){let dt=Math.min(.033,(t-last)/1000||.016);last=t;update(dt);draw();requestAnimationFrame(loop)}
+function loop(t){let dt=Math.min(.022,(t-last)/1000||.016);last=t;update(dt);draw();requestAnimationFrame(loop)}
 const input={move:{x:0,y:0},aim:{x:1,y:0}};
 function stickBind(el,obj,onEnd){
  let id=null,knob=el.querySelector('.knob');

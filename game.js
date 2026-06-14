@@ -10,7 +10,7 @@ const rayRect=(x1,y1,x2,y2,r)=>{let dx=x2-x1,dy=y2-y1,t0=0,t1=1;for(const [p,q] 
 const blocked=(a,b)=>walls.some(w=>rayRect(a.x,a.y,b.x,b.y,w));
 const wallNear=(x,y,r=46)=>walls.some(w=>rectHit({x,y,r},w));
 const freeSpot=(r=30)=>{for(let t=0;t<2000;t++){let p={x:rnd(260,MAP.w-260),y:rnd(260,MAP.h-260),r};if(!walls.some(w=>rectHit(p,w))&&!boxes.some(b=>dist(p,b)<80)&&(!player||dist(p,player)>650))return p}return{x:300,y:300,r}};
-function makeBrawler(x,y,me=false){return{x,y,r:24,me,hp:420,maxHp:420,power:0,ammo:3,ammoT:0,ult:0,aim:0,dead:false,lastAction:0,lastHit:0,speed:me?235:205,aiT:0,target:null,shootT:0,stuckT:0,lastX:x,lastY:y,detour:0,brain:Math.random()*6.28,moveX:0,moveY:0,decisionT:0,goal:null,color:me?'#8e45d6':'#e84f4f'}}
+function makeBrawler(x,y,me=false){return{x,y,r:24,me,hp:420,maxHp:420,power:0,ammo:3,ammoT:0,ult:0,aim:0,dead:false,lastAction:0,lastHit:0,speed:me?315:285,aiT:0,target:null,shootT:0,stuckT:0,lastX:x,lastY:y,detour:0,brain:Math.random()*6.28,moveX:0,moveY:0,decisionT:0,goal:null,color:me?'#8e45d6':'#e84f4f'}}
 function reset(){state='play';overlay.classList.remove('show');msg='';walls=[];boxes=[];bullets=[];cubes=[];gas={r:2500,t:0};
  // walls
  for(let i=0;i<34;i++){let w={x:rnd(200,MAP.w-520),y:rnd(180,MAP.h-360),w:rnd(120,360),h:rnd(80,240)};if(Math.hypot(w.x-MAP.w/2,w.y-MAP.h/2)>260)walls.push(w)}
@@ -19,8 +19,8 @@ function reset(){state='play';overlay.classList.remove('show');msg='';walls=[];b
  player=makeBrawler(MAP.w/2,MAP.h/2,true);
  while(walls.some(w=>rectHit(player,w))||boxes.some(b=>dist(player,b)<70)){let p=freeSpot(24);player.x=p.x;player.y=p.y}
  bots=[];for(let i=0;i<9;i++){let p=freeSpot(24);while(dist(p,player)<900)p=freeSpot(24);bots.push(makeBrawler(p.x,p.y,false))}
- last=performance.now();requestAnimationFrame(loop)}
-function addPower(e){e.power++;e.maxHp=420+e.power*70;e.hp=Math.min(e.maxHp,e.hp+70);e.speed=(e.me?235:205)+Math.min(35,e.power*3)}
+ last=performance.now()} // loop is started once globally
+function addPower(e){e.power++;e.maxHp=420+e.power*70;e.hp=Math.min(e.maxHp,e.hp+70);e.speed=(e.me?315:285)+Math.min(45,e.power*4)}
 function damageFor(e,ult=false){return (ult?115:74)+e.power*(ult?14:9)}
 function canMove(e,nx,ny){let oldx=e.x,oldy=e.y;e.x=nx;e.y=ny;let bad=walls.some(w=>rectHit(e,w));e.x=oldx;e.y=oldy;return !bad}
 function move(e,dx,dy,dt,faceMove=true){let len=Math.hypot(dx,dy);if(len>1){dx/=len;dy/=len}let ox=e.x,oy=e.y;let nx=clamp(e.x+dx*e.speed*dt,e.r,MAP.w-e.r),ny=e.y;if(canMove(e,nx,ny))e.x=nx;ny=clamp(e.y+dy*e.speed*dt,e.r,MAP.h-e.r);if(canMove(e,e.x,ny))e.y=ny;if(faceMove&&len>.1&&Math.hypot(e.x-ox,e.y-oy)>0.5)e.aim=Math.atan2(dy,dx)}
@@ -44,6 +44,10 @@ function update(dt){if(state!=='play')return;let now=performance.now()/1000;
   else if(box){target=box;mode='box'}
   else target={x:MAP.w/2,y:MAP.h/2};
   let dx=target.x-b.x,dy=target.y-b.y,d=Math.hypot(dx,dy)||1,baseAng=Math.atan2(dy,dx);
+  // 독가스 밖/가장자리에서는 최우선으로 안전지대 안쪽으로 이동
+  let gasDist=Math.hypot(b.x-MAP.w/2,b.y-MAP.h/2);
+  let gasDanger=gasDist>gas.r-260;
+  if(gasDanger){target={x:MAP.w/2,y:MAP.h/2};mode='safe';dx=target.x-b.x;dy=target.y-b.y;d=Math.hypot(dx,dy)||1;baseAng=Math.atan2(dy,dx)}
 
   // 조준은 이동 방향과 완전히 분리. 그래서 캐릭터가 좌우로 덜덜 떨지 않음
   let da=Math.atan2(Math.sin(baseAng-b.aim),Math.cos(baseAng-b.aim));
@@ -110,7 +114,10 @@ function update(dt){if(state!=='play')return;let now=performance.now()/1000;
  // cubes pickup
  [player,...bots].forEach(e=>{if(e.dead)return;for(let i=cubes.length-1;i>=0;i--){if(Math.hypot(e.x-cubes[i].x,e.y-cubes[i].y)<e.r+28){for(let k=0;k<cubes[i].n;k++)addPower(e);cubes.splice(i,1)}}});
  // gas shrink + damage
- gas.t+=dt;gas.r=Math.max(520,2500-gas.t*18);[player,...bots].forEach(e=>{if(!e.dead&&Math.hypot(e.x-MAP.w/2,e.y-MAP.h/2)>gas.r){e.hp-=95*dt;e.lastHit=now;if(e.hp<=0)e.dead=true}});
+ gas.t+=dt;gas.r=Math.max(520,2500-gas.t*18);
+ // 독가스는 플레이어에게만 데미지를 주고, AI는 죽지 않게 안전지대 쪽으로 밀어 넣음
+ if(!player.dead&&Math.hypot(player.x-MAP.w/2,player.y-MAP.h/2)>gas.r){player.hp-=95*dt;player.lastHit=now;if(player.hp<=0)player.dead=true}
+ bots.forEach(b=>{if(b.dead)return;let gd=Math.hypot(b.x-MAP.w/2,b.y-MAP.h/2);if(gd>gas.r-40){let ax=(MAP.w/2-b.x)/(gd||1),ay=(MAP.h/2-b.y)/(gd||1);move(b,ax,ay,dt*1.8,false);b.hp=Math.max(1,b.hp)}});
  let alive=[player,...bots].filter(e=>!e.dead);teamsEl.textContent='남은 팀: '+alive.length;powerEl.textContent='파워큐브: '+player.power;ultBtn.classList.toggle('ready',player.ult>=5);if(player.dead)end('패배...');else if(alive.length===1&&alive[0]===player)end('승리!')}
 function end(t){state='end';msg=t;overlay.querySelector('h1').innerHTML=t;overlay.querySelector('p').innerHTML='파워큐브 '+player.power+'개 획득';startBtn.textContent='다시 플레이';overlay.classList.add('show')}
 function draw(){cam.x=clamp(player.x-W/2,0,MAP.w-W);cam.y=clamp(player.y-H/2,0,MAP.h-H);ctx.clearRect(0,0,W,H);ctx.save();ctx.translate(-cam.x,-cam.y);
@@ -148,4 +155,4 @@ ultBtn.addEventListener('pointerdown',fireUlt,{passive:false});
 ultBtn.addEventListener('touchstart',fireUlt,{passive:false});
 ultBtn.onclick=fireUlt;
 startBtn.onclick=()=>{overlay.querySelector('h1').innerHTML='MOBILE<br>SHOTDOWN';overlay.querySelector('p').innerHTML='왼쪽 조이스틱: 이동<br>오른쪽 조이스틱: 조준/공격<br>궁극기 버튼: 벽 파괴 산탄';startBtn.textContent='게임 시작';reset()};
-document.addEventListener('gesturestart',e=>e.preventDefault());draw();
+document.addEventListener('gesturestart',e=>e.preventDefault());last=performance.now();requestAnimationFrame(loop);

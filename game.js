@@ -10,7 +10,7 @@ const rayRect=(x1,y1,x2,y2,r)=>{let dx=x2-x1,dy=y2-y1,t0=0,t1=1;for(const [p,q] 
 const blocked=(a,b)=>walls.some(w=>rayRect(a.x,a.y,b.x,b.y,w));
 const wallNear=(x,y,r=46)=>walls.some(w=>rectHit({x,y,r},w));
 const freeSpot=(r=30)=>{for(let t=0;t<2000;t++){let p={x:rnd(260,MAP.w-260),y:rnd(260,MAP.h-260),r};if(!walls.some(w=>rectHit(p,w))&&!boxes.some(b=>dist(p,b)<80)&&(!player||dist(p,player)>650))return p}return{x:300,y:300,r}};
-function makeBrawler(x,y,me=false){return{x,y,r:24,me,hp:420,maxHp:420,power:0,ammo:3,ammoT:0,ult:0,aim:0,dead:false,lastAction:0,lastHit:0,speed:me?235:205,aiT:0,target:null,shootT:0,stuckT:0,lastX:x,lastY:y,detour:0,brain:Math.random()*6.28,color:me?'#8e45d6':'#e84f4f'}}
+function makeBrawler(x,y,me=false){return{x,y,r:24,me,hp:420,maxHp:420,power:0,ammo:3,ammoT:0,ult:0,aim:0,dead:false,lastAction:0,lastHit:0,speed:me?235:205,aiT:0,target:null,shootT:0,stuckT:0,lastX:x,lastY:y,detour:0,brain:Math.random()*6.28,moveX:0,moveY:0,decisionT:0,goal:null,color:me?'#8e45d6':'#e84f4f'}}
 function reset(){state='play';overlay.classList.remove('show');msg='';walls=[];boxes=[];bullets=[];cubes=[];gas={r:2500,t:0};
  // walls
  for(let i=0;i<34;i++){let w={x:rnd(200,MAP.w-520),y:rnd(180,MAP.h-360),w:rnd(120,360),h:rnd(80,240)};if(Math.hypot(w.x-MAP.w/2,w.y-MAP.h/2)>260)walls.push(w)}
@@ -44,28 +44,39 @@ function update(dt){if(state!=='play')return;let now=performance.now()/1000;
   else if(cube){target=cube;mode='cube'}
   else if(box){target=box;mode='box'}
   else target={x:MAP.w/2,y:MAP.h/2};
-  let dx=target.x-b.x,dy=target.y-b.y,d=Math.hypot(dx,dy)||1,baseAng=Math.atan2(dy,dx);b.aim=baseAng;
-  // 이동 방향 후보 16개 중 목표에 가까워지고 벽에 덜 박는 방향 선택
-  let desired=(mode==='fight'&&d<260)?baseAng+Math.PI:baseAng;
-  let best={score:-1e9,x:Math.cos(desired),y:Math.sin(desired)};
-  for(let k=0;k<16;k++){let a=desired+((k%2?k:-k)/16)*Math.PI*1.6 + b.detour;let vx=Math.cos(a),vy=Math.sin(a);let nx=b.x+vx*95,ny=b.y+vy*95;
-   let score=-(Math.hypot(target.x-nx,target.y-ny));
-   if(mode==='fight'&&d>420)score+=180*(vx*dx/d+vy*dy/d);
-   if(wallNear(nx,ny,54))score-=1200;
-   if(nx<80||ny<80||nx>MAP.w-80||ny>MAP.h-80)score-=800;
-   let gasDist=Math.hypot(nx-MAP.w/2,ny-MAP.h/2);if(gasDist>gas.r-160)score-=1500;
-   if(score>best.score)best={score,x:vx,y:vy};
+  let dx=target.x-b.x,dy=target.y-b.y,d=Math.hypot(dx,dy)||1,baseAng=Math.atan2(dy,dx);
+  // 조준은 부드럽게 회전해서 캐릭터가 덜 흔들리게 함
+  let da=Math.atan2(Math.sin(baseAng-b.aim),Math.cos(baseAng-b.aim));b.aim+=clamp(da,-4.5*dt,4.5*dt);
+  // 이동 판단은 매 프레임 바꾸지 않고 0.22초마다 갱신 + 이전 방향과 보간해서 지그재그 방지
+  b.decisionT-=dt;
+  if(b.decisionT<=0){
+   b.decisionT=.20+Math.random()*.08;
+   let desired=(mode==='fight'&&d<230)?baseAng+Math.PI:(mode==='fight'&&d<420?baseAng+Math.PI*.32:baseAng);
+   let best={score:-1e9,x:Math.cos(desired),y:Math.sin(desired)};
+   for(let k=0;k<24;k++){let a=desired+((k%2?k:-k)/24)*Math.PI*1.9 + b.detour;let vx=Math.cos(a),vy=Math.sin(a);let nx=b.x+vx*130,ny=b.y+vy*130;
+    let score=-(Math.hypot(target.x-nx,target.y-ny));
+    if(mode==='fight'&&d>460)score+=260*(vx*dx/d+vy*dy/d);
+    if(mode==='fight'&&d<260)score+=220*(-vx*dx/d-vy*dy/d);
+    // 이전 이동방향 선호: 갑자기 좌우로 떠는 문제 해결
+    score+=170*(vx*b.moveX+vy*b.moveY);
+    if(wallNear(nx,ny,60))score-=1600;
+    if(nx<100||ny<100||nx>MAP.w-100||ny>MAP.h-100)score-=900;
+    let gasDist=Math.hypot(nx-MAP.w/2,ny-MAP.h/2);if(gasDist>gas.r-180)score-=1800;
+    if(score>best.score)best={score,x:vx,y:vy};
+   }
+   b.goal=best;
   }
-  if(Math.hypot(b.x-b.lastX,b.y-b.lastY)<6)b.stuckT+=dt;else b.stuckT=0;
-  if(b.stuckT>.45){b.detour+=1.35;b.stuckT=0}b.lastX=b.x;b.lastY=b.y;
-  move(b,best.x,best.y,dt);
-  // 공격: 벽에 막힌 상대에게 무의미하게 난사하지 않음. 궁이 있으면 막힌 벽을 부숨.
-  b.shootT-=dt;let clear=target&&!blocked(b,target);
+  if(b.goal){b.moveX=b.moveX*.84+b.goal.x*.16;b.moveY=b.moveY*.84+b.goal.y*.16;let ml=Math.hypot(b.moveX,b.moveY)||1;b.moveX/=ml;b.moveY/=ml}
+  if(Math.hypot(b.x-b.lastX,b.y-b.lastY)<4)b.stuckT+=dt;else b.stuckT=0;
+  if(b.stuckT>.65){b.detour+=1.1+Math.random()*.8;b.decisionT=0;b.stuckT=0}b.lastX=b.x;b.lastY=b.y;
+  move(b,b.moveX,b.moveY,dt);
+  // 공격: 벽 앞 난사 금지, 조준 완료 후 발사
+  b.shootT-=dt;let clear=target&&!blocked(b,target);let aimOk=Math.abs(Math.atan2(Math.sin(baseAng-b.aim),Math.cos(baseAng-b.aim)))<.45;
   if(b.shootT<=0){
-   if((mode==='fight'||mode==='hunt')&&d<620){
-    if(clear){shoot(b,baseAng,false);b.shootT=.68+Math.random()*.25}
-    else if(b.ult>=5&&d<700){shoot(b,baseAng,true);b.shootT=1.2}
-   }else if(mode==='box'&&d<430&&!blocked(b,target)){shoot(b,baseAng,false);b.shootT=.85}
+   if((mode==='fight'||mode==='hunt')&&d<650){
+    if(clear&&aimOk){shoot(b,b.aim,false);b.shootT=.78+Math.random()*.28}
+    else if(!clear&&b.ult>=5&&d<720){shoot(b,baseAng,true);b.shootT=1.35}
+   }else if(mode==='box'&&d<430&&!blocked(b,target)&&aimOk){shoot(b,b.aim,false);b.shootT=.95}
   }
  });
  // bullets
@@ -96,6 +107,22 @@ function drawBrawler(e){if(e.dead)return;ctx.save();ctx.translate(e.x,e.y);ctx.r
  // ult / power
  ctx.fillStyle='#fff';ctx.font='bold 13px Arial';ctx.textAlign='center';ctx.fillText('◆'+e.power,e.x,py-5);ctx.fillStyle='#36a4ff';ctx.fillRect(px,py+22,bw*(e.ult/5),5)}
 function loop(t){let dt=Math.min(.033,(t-last)/1000||.016);last=t;update(dt);draw();requestAnimationFrame(loop)}
-const input={move:{x:0,y:0},aim:{x:1,y:0}};function stickBind(el,obj,onEnd){let id=null,knob=el.querySelector('.knob'),rect=()=>el.getBoundingClientRect();function set(x,y){let r=rect(),cx=r.left+r.width/2,cy=r.top+r.height/2,dx=x-cx,dy=y-cy,m=Math.hypot(dx,dy),max=42;if(m>max){dx=dx/m*max;dy=dy/m*max}knob.style.left=32+dx+'px';knob.style.top=32+dy+'px';obj.x=dx/max;obj.y=dy/max;return Math.hypot(obj.x,obj.y)}el.addEventListener('touchstart',e=>{let q=e.changedTouches[0];id=q.identifier;set(q.clientX,q.clientY);e.preventDefault()});el.addEventListener('touchmove',e=>{for(const q of e.changedTouches)if(q.identifier===id)set(q.clientX,q.clientY);e.preventDefault()});el.addEventListener('touchend',e=>{for(const q of e.changedTouches)if(q.identifier===id){if(onEnd)onEnd(obj);obj.x=0;obj.y=0;knob.style.left='32px';knob.style.top='32px';id=null}})}
-stickBind(moveStick,input.move);stickBind(aimStick,input.aim,(v)=>{let m=Math.hypot(v.x,v.y);if(m>.25){player.aim=Math.atan2(v.y,v.x);shoot(player,player.aim,false)}});ultBtn.onclick=()=>shoot(player,player.aim,true);startBtn.onclick=()=>{overlay.querySelector('h1').innerHTML='MOBILE<br>SHOTDOWN';overlay.querySelector('p').innerHTML='왼쪽 조이스틱: 이동<br>오른쪽 조이스틱: 조준/공격<br>궁극기 버튼: 벽 파괴 산탄';startBtn.textContent='게임 시작';reset()};
+const input={move:{x:0,y:0},aim:{x:1,y:0}};
+function stickBind(el,obj,onEnd){
+ let id=null,knob=el.querySelector('.knob');
+ const center=()=>{let r=el.getBoundingClientRect();return{x:r.left+r.width/2,y:r.top+r.height/2}};
+ function set(x,y){let c=center(),dx=x-c.x,dy=y-c.y,m=Math.hypot(dx,dy),max=42;if(m>max){dx=dx/m*max;dy=dy/m*max}knob.style.left=32+dx+'px';knob.style.top=32+dy+'px';obj.x=dx/max;obj.y=dy/max;return Math.hypot(obj.x,obj.y)}
+ function resetStick(){obj.x=0;obj.y=0;knob.style.left='32px';knob.style.top='32px';id=null}
+ el.addEventListener('pointerdown',e=>{id=e.pointerId;el.setPointerCapture(id);set(e.clientX,e.clientY);e.preventDefault()},{passive:false});
+ el.addEventListener('pointermove',e=>{if(e.pointerId===id){set(e.clientX,e.clientY);e.preventDefault()}},{passive:false});
+ el.addEventListener('pointerup',e=>{if(e.pointerId===id){if(onEnd)onEnd({...obj});resetStick();e.preventDefault()}},{passive:false});
+ el.addEventListener('pointercancel',e=>{if(e.pointerId===id)resetStick()},{passive:false});
+}
+stickBind(moveStick,input.move);
+stickBind(aimStick,input.aim,(v)=>{let m=Math.hypot(v.x,v.y);if(m>.25){player.aim=Math.atan2(v.y,v.x);shoot(player,player.aim,false)}});
+function fireUlt(e){if(e){e.preventDefault();e.stopPropagation()}if(state==='play'&&player&&!player.dead)shoot(player,player.aim,true)}
+ultBtn.addEventListener('pointerdown',fireUlt,{passive:false});
+ultBtn.addEventListener('touchstart',fireUlt,{passive:false});
+ultBtn.onclick=fireUlt;
+startBtn.onclick=()=>{overlay.querySelector('h1').innerHTML='MOBILE<br>SHOTDOWN';overlay.querySelector('p').innerHTML='왼쪽 조이스틱: 이동<br>오른쪽 조이스틱: 조준/공격<br>궁극기 버튼: 벽 파괴 산탄';startBtn.textContent='게임 시작';reset()};
 document.addEventListener('gesturestart',e=>e.preventDefault());draw();

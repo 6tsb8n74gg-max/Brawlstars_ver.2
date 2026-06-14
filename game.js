@@ -23,60 +23,83 @@ function reset(){state='play';overlay.classList.remove('show');msg='';walls=[];b
 function addPower(e){e.power++;e.maxHp=420+e.power*70;e.hp=Math.min(e.maxHp,e.hp+70);e.speed=(e.me?235:205)+Math.min(35,e.power*3)}
 function damageFor(e,ult=false){return (ult?115:74)+e.power*(ult?14:9)}
 function canMove(e,nx,ny){let oldx=e.x,oldy=e.y;e.x=nx;e.y=ny;let bad=walls.some(w=>rectHit(e,w));e.x=oldx;e.y=oldy;return !bad}
-function move(e,dx,dy,dt){let len=Math.hypot(dx,dy);if(len>1){dx/=len;dy/=len}let nx=clamp(e.x+dx*e.speed*dt,e.r,MAP.w-e.r),ny=e.y;if(canMove(e,nx,ny))e.x=nx;ny=clamp(e.y+dy*e.speed*dt,e.r,MAP.h-e.r);if(canMove(e,e.x,ny))e.y=ny;if(len>.1)e.aim=Math.atan2(dy,dx)}
+function move(e,dx,dy,dt,faceMove=true){let len=Math.hypot(dx,dy);if(len>1){dx/=len;dy/=len}let ox=e.x,oy=e.y;let nx=clamp(e.x+dx*e.speed*dt,e.r,MAP.w-e.r),ny=e.y;if(canMove(e,nx,ny))e.x=nx;ny=clamp(e.y+dy*e.speed*dt,e.r,MAP.h-e.r);if(canMove(e,e.x,ny))e.y=ny;if(faceMove&&len>.1&&Math.hypot(e.x-ox,e.y-oy)>0.5)e.aim=Math.atan2(dy,dx)}
 function shoot(e,ang=e.aim,ult=false){if(e.dead)return;if(!ult){if(e.ammo<1)return;e.ammo--;e.ammoT=0}else{if(e.ult<5)return;e.ult=0}e.lastAction=performance.now()/1000;let n=ult?9:5,spread=ult?.62:.46;for(let i=0;i<n;i++){let a=ang-spread/2+spread*(i/(n-1));bullets.push({x:e.x+Math.cos(a)*30,y:e.y+Math.sin(a)*30,vx:Math.cos(a)*(ult?770:690),vy:Math.sin(a)*(ult?770:690),r:ult?7:5,life:ult?.48:.36,own:e,dmg:damageFor(e,ult),ult})}}
 function hitBrawler(target,b){if(target.dead||target===b.own)return;target.hp-=b.dmg;target.lastHit=performance.now()/1000;if(b.own&&!b.ult)b.own.ult=Math.min(5,b.own.ult+1);if(target.hp<=0){target.dead=true;cubes.push({x:target.x,y:target.y,r:16,n:Math.max(1,target.power)})}}
 function update(dt){if(state!=='play')return;let now=performance.now()/1000;
  // ammo + hp regen
  [player,...bots].forEach(e=>{if(e.dead)return;e.ammoT+=dt;if(e.ammo<3&&e.ammoT>=1){e.ammo++;e.ammoT=0}if(now-e.lastHit>3.5&&now-e.lastAction>2.5&&e.hp<e.maxHp)e.hp=Math.min(e.maxHp,e.hp+45*dt)});
- move(player,input.move.x,input.move.y,dt);
- // AI 2.0: 시야 확인, 벽 우회, 목표 추적, 파밍, 궁극기 벽 파괴
+ move(player,input.move.x,input.move.y,dt,false);
+ // AI 3.0: 흔들림 제거형 - 조준과 이동을 분리하고, 목표/이동방향을 오래 유지
  bots.forEach(b=>{if(b.dead)return;
   let enemies=[player,...bots].filter(e=>!e.dead&&e!==b);
   enemies.sort((a,c)=>dist(b,a)-dist(b,c));
-  let visible=enemies.filter(e=>dist(b,e)<1250&&!blocked(b,e));
-  let near=visible[0]||enemies[0];
+  let visible=enemies.filter(e=>dist(b,e)<1300&&!blocked(b,e));
   let cube=[...cubes].sort((a,c)=>dist(b,a)-dist(b,c))[0];
   let box=[...boxes].sort((a,c)=>dist(b,a)-dist(b,c))[0];
   let target=null,mode='roam';
   if(visible[0]){target=visible[0];mode='fight'}
-  else if(near&&dist(b,near)<1100){target=near;mode='hunt'}
+  else if(enemies[0]&&dist(b,enemies[0])<1150){target=enemies[0];mode='hunt'}
   else if(cube){target=cube;mode='cube'}
   else if(box){target=box;mode='box'}
   else target={x:MAP.w/2,y:MAP.h/2};
   let dx=target.x-b.x,dy=target.y-b.y,d=Math.hypot(dx,dy)||1,baseAng=Math.atan2(dy,dx);
-  // 조준은 부드럽게 회전해서 캐릭터가 덜 흔들리게 함
-  let da=Math.atan2(Math.sin(baseAng-b.aim),Math.cos(baseAng-b.aim));b.aim+=clamp(da,-4.5*dt,4.5*dt);
-  // 이동 판단은 매 프레임 바꾸지 않고 0.22초마다 갱신 + 이전 방향과 보간해서 지그재그 방지
+
+  // 조준은 이동 방향과 완전히 분리. 그래서 캐릭터가 좌우로 덜덜 떨지 않음
+  let da=Math.atan2(Math.sin(baseAng-b.aim),Math.cos(baseAng-b.aim));
+  b.aim+=clamp(da,-3.2*dt,3.2*dt);
+
+  // 목표 거리 유지: 가까우면 뒤로, 적당하면 멈춤, 멀면 직선 추적. 불필요한 좌우 회피 제거
   b.decisionT-=dt;
   if(b.decisionT<=0){
-   b.decisionT=.20+Math.random()*.08;
-   let desired=(mode==='fight'&&d<230)?baseAng+Math.PI:(mode==='fight'&&d<420?baseAng+Math.PI*.32:baseAng);
-   let best={score:-1e9,x:Math.cos(desired),y:Math.sin(desired)};
-   for(let k=0;k<24;k++){let a=desired+((k%2?k:-k)/24)*Math.PI*1.9 + b.detour;let vx=Math.cos(a),vy=Math.sin(a);let nx=b.x+vx*130,ny=b.y+vy*130;
-    let score=-(Math.hypot(target.x-nx,target.y-ny));
-    if(mode==='fight'&&d>460)score+=260*(vx*dx/d+vy*dy/d);
-    if(mode==='fight'&&d<260)score+=220*(-vx*dx/d-vy*dy/d);
-    // 이전 이동방향 선호: 갑자기 좌우로 떠는 문제 해결
-    score+=170*(vx*b.moveX+vy*b.moveY);
-    if(wallNear(nx,ny,60))score-=1600;
-    if(nx<100||ny<100||nx>MAP.w-100||ny>MAP.h-100)score-=900;
-    let gasDist=Math.hypot(nx-MAP.w/2,ny-MAP.h/2);if(gasDist>gas.r-180)score-=1800;
-    if(score>best.score)best={score,x:vx,y:vy};
+   b.decisionT=.55+Math.random()*.20;
+   let desiredX=0,desiredY=0;
+   if(mode==='fight'){
+    if(d>610){desiredX=dx/d;desiredY=dy/d}       // 멀면 접근
+    else if(d<330){desiredX=-dx/d;desiredY=-dy/d} // 너무 가까우면 후퇴
+    else {desiredX=0;desiredY=0}                  // 적정 거리면 멈춰서 조준/사격
+   }else{
+    desiredX=dx/d;desiredY=dy/d;
    }
-   b.goal=best;
+
+   // 벽이나 가스 때문에 직선 이동이 막히는 경우에만 우회 방향 선택
+   let nx=b.x+desiredX*150,ny=b.y+desiredY*150;
+   if((desiredX||desiredY)&&(wallNear(nx,ny,62)||Math.hypot(nx-MAP.w/2,ny-MAP.h/2)>gas.r-160)){
+    let best={score:-1e9,x:desiredX,y:desiredY};
+    for(let k=0;k<18;k++){
+     let side=(k%2?1:-1)*Math.ceil(k/2);
+     let a=Math.atan2(desiredY,desiredX)+side*.32+b.detour;
+     let vx=Math.cos(a),vy=Math.sin(a),tx=b.x+vx*160,ty=b.y+vy*160;
+     let score=-Math.hypot(target.x-tx,target.y-ty)+260*(vx*b.moveX+vy*b.moveY);
+     if(wallNear(tx,ty,62))score-=1800;
+     if(Math.hypot(tx-MAP.w/2,ty-MAP.h/2)>gas.r-160)score-=1800;
+     if(score>best.score)best={score,x:vx,y:vy};
+    }
+    desiredX=best.x;desiredY=best.y;
+   }
+   b.goal={x:desiredX,y:desiredY};
   }
-  if(b.goal){b.moveX=b.moveX*.84+b.goal.x*.16;b.moveY=b.moveY*.84+b.goal.y*.16;let ml=Math.hypot(b.moveX,b.moveY)||1;b.moveX/=ml;b.moveY/=ml}
-  if(Math.hypot(b.x-b.lastX,b.y-b.lastY)<4)b.stuckT+=dt;else b.stuckT=0;
-  if(b.stuckT>.65){b.detour+=1.1+Math.random()*.8;b.decisionT=0;b.stuckT=0}b.lastX=b.x;b.lastY=b.y;
-  move(b,b.moveX,b.moveY,dt);
-  // 공격: 벽 앞 난사 금지, 조준 완료 후 발사
-  b.shootT-=dt;let clear=target&&!blocked(b,target);let aimOk=Math.abs(Math.atan2(Math.sin(baseAng-b.aim),Math.cos(baseAng-b.aim)))<.45;
+
+  // 큰 관성 적용: 방향을 확 꺾지 않게 해서 떨림 방지
+  if(b.goal){
+   b.moveX=b.moveX*.94+b.goal.x*.06;
+   b.moveY=b.moveY*.94+b.goal.y*.06;
+   let ml=Math.hypot(b.moveX,b.moveY);
+   if(ml<.08){b.moveX=0;b.moveY=0}else{b.moveX/=ml;b.moveY/=ml}
+  }
+
+  if(Math.hypot(b.x-b.lastX,b.y-b.lastY)<3&&Math.hypot(b.moveX,b.moveY)>.2)b.stuckT+=dt;else b.stuckT=0;
+  if(b.stuckT>.9){b.detour+=(Math.random()<.5?-1:1)*1.05;b.decisionT=0;b.stuckT=0}
+  b.lastX=b.x;b.lastY=b.y;
+  move(b,b.moveX,b.moveY,dt,false);
+
+  // 공격은 멈춰서 조준 후 발사. 벽 앞 난사 금지
+  b.shootT-=dt;let clear=target&&!blocked(b,target);let aimOk=Math.abs(Math.atan2(Math.sin(baseAng-b.aim),Math.cos(baseAng-b.aim)))<.38;
   if(b.shootT<=0){
-   if((mode==='fight'||mode==='hunt')&&d<650){
-    if(clear&&aimOk){shoot(b,b.aim,false);b.shootT=.78+Math.random()*.28}
-    else if(!clear&&b.ult>=5&&d<720){shoot(b,baseAng,true);b.shootT=1.35}
-   }else if(mode==='box'&&d<430&&!blocked(b,target)&&aimOk){shoot(b,b.aim,false);b.shootT=.95}
+   if((mode==='fight'||mode==='hunt')&&d<680){
+    if(clear&&aimOk){shoot(b,b.aim,false);b.shootT=.85+Math.random()*.30}
+    else if(!clear&&b.ult>=5&&d<760){shoot(b,baseAng,true);b.shootT=1.45}
+   }else if(mode==='box'&&d<440&&!blocked(b,target)&&aimOk){shoot(b,b.aim,false);b.shootT=1.0}
   }
  });
  // bullets
